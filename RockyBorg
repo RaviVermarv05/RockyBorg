@@ -1,0 +1,168 @@
+from picamera2 import Picamera2
+import cv2
+import numpy as np
+import time
+import sys
+sys.path.insert(0, '/home/admin/project/rockyborg/')
+from RockyBorg import RockyBorg
+
+def main():
+    # Initialize RockyBorg
+    RB = RockyBorg()
+    RB.Init()
+    RB.SetCommsFailsafe(False)
+    RB.SetMotorsEnabled(True)
+
+    # Initialize PiCamera2
+    picam2 = Picamera2()
+    config = picam2.create_preview_configuration(
+        main={"size": (2400, 1800)},
+        controls={
+            "AwbEnable": True,
+            "AeEnable": True,
+            "ExposureTime": 30000,
+            "AnalogueGain": 4.0,
+            "FrameRate": 30
+        }
+    )
+    picam2.configure(config)
+    picam2.start()
+    time.sleep(0)
+
+    # Control parameters
+    BASE_SPEED = 0.4
+    TURN_GAIN = 0.5
+    MOTOR_INVERT = -1
+
+    def clamp_power(value):
+        return max(-1.0, min(1.0, value))
+
+    try:
+        print("Line following with red object and cross junction detection. Press 'q' to exit.")
+        while True:
+            frame = picam2.capture_array()
+            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+
+            # ROI selection
+            h, w = frame_bgr.shape[:2]
+            roi_w = int(w * 0.6)
+            roi_h = int(h * 0.4)
+            roi_x = int((w - roi_w) / 2)
+            roi_y = int(h * 0.3)
+            cropped = frame_bgr[roi_y:roi_y+roi_h, roi_x:roi_x+roi_w]
+
+            # CLAHE enhancement
+            lab = cv2.cvtColor(cropped, cv2.COLOR_BGR2LAB)
+            l, a, b = cv2.split(lab)
+            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
+            limg = clahe.apply(l)
+            enhanced = cv2.merge([limg, a, b])
+            enhanced = cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
+
+            # Cropping sequence
+            side_crop = int(cropped.shape[1] * 0.25)
+            narrow_frame = enhanced[:, side_crop:-side_crop]
+            temp_frame = narrow_frame[narrow_frame.shape[0]//2:, :]
+            final_frame = temp_frame[int(temp_frame.shape[0]*0.3):, :]
+            final_side_crop = int(final_frame.shape[1] * 0.25)
+            extreme_narrow_frame = final_frame[:, final_side_crop:-final_side_crop]
+
+            # Grayscale + threshold
+            gray = cv2.cvtColor(extreme_narrow_frame, cv2.COLOR_BGR2GRAY)
+            blurred = cv2.GaussianBlur(gray, (7,7), 0)
+            binary = cv2.adaptiveThreshold(blurred, 255,
+                                         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                         cv2.THRESH_BINARY_INV, 21, 5)
+
+            # Contour detection for black line
+            contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            valid_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > 100]
+
+            line_found = False
+            line_center = 0
+            cross_junction = False
+
+            if valid_contours:
+                # Sort by area (descending)
+                valid_contours = sorted(valid_contours, key=cv2.contourArea, reverse=True)
+                if len(valid_contours) >= 3:
+                    # Cross junction detected (more than 2 significant contours)
+                    cross_junction = True
+
+                # Use largest contour for line tracking
+                largest = valid_contours[0]
+                x, y, w, h = cv2.boundingRect(largest)
+                line_center = ((x + w/2) / binary.shape[1]) * 2 - 1
+                line_found = True
+                cv2.rectangle(extreme_narrow_frame, (x,y), (x+w,y+h), (0,255,0), 2)
+
+            # Red object detection
+            red_detected = False
+            hsv = cv2.cvtColor(extreme_narrow_frame, cv2.COLOR_BGR2HSV)
+            lower_red1 = np.array([0, 120, 70])
+            upper_red1 = np.array([10, 255, 255])
+            lower_red2 = np.array([160, 120, 70])
+            upper_red2 = np.array([180, 255, 255])
+            mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
+            mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
+            red_mask = cv2.bitwise_or(mask1, mask2)
+
+            kernel = np.ones((5,5), np.uint8)
+            red_mask = cv2.erode(red_mask, kernel, iterations=1)
+            red_mask = cv2.dilate(red_mask, kernel, iterations=1)
+
+            red_contours, _ = cv2.findContours(red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            for cnt in red_contours:
+                if cv2.contourArea(cnt) > 500:
+                    red_detected = True
+                    cv2.drawContours(extreme_narrow_frame, [cnt], -1, (0,0,255), 2)
+                    break
+
+            # Motor logic
+            if red_detected:
+                RB.MotorsOff()
+                status = "RED DETECTED - STOPPED"
+            elif cross_junction:
+                left = clamp_power(BASE_SPEED)
+                right = clamp_power(BASE_SPEED)
+                RB.SetMotor1(left)
+                RB.SetMotor2(right * MOTOR_INVERT)
+                status = "CROSS JUNCTION - GO STRAIGHT"
+            elif line_found:
+                turn = line_center * TURN_GAIN
+                left = clamp_power(BASE_SPEED + turn)
+                right = clamp_power(BASE_SPEED - turn)
+                RB.SetMotor1(left)
+                RB.SetMotor2(right * MOTOR_INVERT)
+                status = f"LINE FOLLOWING: {line_center:.2f}"
+            else:
+                RB.MotorsOff()
+                status = "NO LINE"
+
+            # Visual center overlay
+            height, width = extreme_narrow_frame.shape[:2]
+            center_x = width // 2
+            margin = 20
+            cv2.line(extreme_narrow_frame, (center_x, 0), (center_x, height), (0, 255, 0), 2)
+            cv2.line(extreme_narrow_frame, (center_x - margin, 0), (center_x - margin, height), (255, 0, 0), 1)
+            cv2.line(extreme_narrow_frame, (center_x + margin, 0), (center_x + margin, height), (255, 0, 0), 1)
+
+            # Status text overlay
+            cv2.putText(extreme_narrow_frame, status, (10, 20), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6, (0, 255, 255), 2, cv2.LINE_AA)
+
+            # Show images
+            cv2.imshow("Processing View", extreme_narrow_frame)
+            cv2.imshow("Binary", binary)
+            cv2.imshow("Red Mask", red_mask)
+
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+
+    finally:
+        RB.MotorsOff()
+        picam2.stop()
+        cv2.destroyAllWindows()
+
+if __name__ == "__main__":
+    main()
