@@ -1,6 +1,6 @@
-Autonomous Line-Following Robot with Red Object and Junction Detection 🚗📷
+# Autonomous Line-Following Robot with Red Object and Junction Detection 🚗📷
 
-Note: This project is still in the development phase and primarily built for internal learning and experimentation.
+>Note: This project is still in the development phase and primarily built for internal learning and experimentation.
 
 
 This repository contains the software for an autonomous robot developed as part of a college project involving 14 team members, including 4 key developers. The robot uses PiCamera2 and OpenCV for real-time image processing to follow a black line, detect red objects, and handle cross junctions. It is controlled via a RockyBorg motor controller on a Raspberry Pi.
@@ -10,10 +10,10 @@ This repository contains the software for an autonomous robot developed as part 
 
 
 
-👨‍💻 Project Lead: 
+## 👨‍💻 Project Lead: 
 I am the software lead responsible for the architecture, core logic, and image processing pipeline.
 
-🚀 Features
+## 🚀 Features
 Real-time black line detection and navigation
 
 Red object detection with obstacle stop
@@ -24,7 +24,7 @@ Motor control via RockyBorg API
 
 Enhanced image processing using CLAHE and adaptive thresholding
 
-⚙️ Technologies Used
+## ⚙️ Technologies Used
 Python 
 
 OpenCV
