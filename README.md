@@ -8,7 +8,7 @@ Note: This project is still in the development phase and primarily built for int
 
 
 
-👨‍💻 Project Lead
+👨‍💻 Project Lead: 
 I am the software lead responsible for the architecture, core logic, and image processing pipeline.
 
 🚀 Features
